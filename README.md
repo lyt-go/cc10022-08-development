@@ -69,6 +69,52 @@ npm run dev
 | 主数据查询接口 | `mdm_api` | 查询接口 | 接口编号、实体模型、查询字段 |
 | 主数据治理看板 | `mdm_dashboard` | 看板配置 | 看板编号、看板名称、监控实体 |
 
+## 目标列冲突校验
+
+一条源记录的两个源字段可能都映射到同一目标列（例如旧工商号与统一
+信用代码都写入工商标识）。`data_import_rule` 会为每条原始行生成字段
+映射校验明细，逐行给出：
+
+| 场景 | 明细判定 | 目标列 |
+| --- | --- | --- |
+| 多个来源列非空且值一致 | 一致 | 写入该值 |
+| 只有一个来源列有值 | 单列有值 | 写入该值 |
+| 两个非空值不一致，规则有来源优先级 | 按规则裁定 | 写入优先级最高的来源值 |
+| 两个非空值不一致，规则没有裁定依据 | 冲突 | 留空，该行退回修订 |
+| 全部来源列为空 | 无值 | 留空 |
+
+- 明细保留每一行的原值和来源列，冲突行额外记录 `采用值`/`采用来源列`
+  为空的原因，导入人可以直接核对两边值。
+- `批次导入管理` 以该明细认定核实过的输入范围（`verified_scope`），
+  每条原始行只计一次；实际入库数按可入库且未重复的行计，拒绝数按
+  冲突未裁定或无法映射的行计，三者之和必须等于原始行数。
+- 目标表尚未确认时批次停在 `待确认`；存在拒绝行时批次进入 `待修订`，
+  经办人核对后再提交修订批次。
+- 目标实体中已确认的客户记录、以及过往已结算批次确认过的标识，再次
+  提交时只计入重复数，不会重复入库。
+
+```bash
+# 生成字段映射校验明细（入库规则维度）
+curl -X POST http://127.0.0.1:8000/api/data_import_rule/3/field-mapping-validation \
+  -H 'Content-Type: application/json' \
+  -d '{"records":[{"旧工商号":"3100001234567","统一信用代码":"91310000MA1K35Q32X"}]}'
+
+# 按校验明细结算批次（批次导入管理维度）
+curl -X POST http://127.0.0.1:8000/api/import_batch/1/settle \
+  -H 'Content-Type: application/json' \
+  -d '{"rule_id":3,"records":[...],"target_table_confirmed":false}'
+
+# 目标表确认后提交修订批次
+curl -X POST http://127.0.0.1:8000/api/import_batch/1/submit-revision \
+  -H 'Content-Type: application/json' \
+  -d '{"rule_id":3,"records":[...],"target_table_confirmed":true}'
+```
+
+字段映射配置支持 `旧工商号->工商标识,统一信用代码->工商标识`、
+`旧工商号,统一信用代码->工商标识` 和 `旧工商号+统一信用代码->工商标识`
+三种写法；来源优先级写在 `校验规则` 里，例如 `统一信用代码>旧工商号`
+或 `以统一信用代码为准`。
+
 ## 约定
 
 - 全部模块共享`frontend/src/views/WorkbenchView.vue|tsx`和一套资源路由。
@@ -76,6 +122,8 @@ npm run dev
   `frontend/src/domain/<模块>.ts`，用于承载真实业务差异并维持36题位容量。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+- 校验与结算类动作放在 `backend/app/routers/validation.py`，由
+  `data_import_rule` / `import_batch` 的领域服务实现，路由只做参数转换。
 
 领域：数据工程
 子方向：数仓与数据湖

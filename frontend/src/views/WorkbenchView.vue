@@ -46,7 +46,7 @@
         </tr>
       </thead>
       <tbody>
-        <tr v-for="row in rows" :key="String(row.id)" :data-testid="`row-${row.id}`" :data-status="String(row.status)">
+        <tr v-for="row in rows" :key="String(row.id)" :data-testid="`row-${row.id}`" :data-status="String(row.status)" @click="selectRow(row)">
           <td v-for="column in meta.fields" :key="column">{{ row[column] ?? '—' }}</td>
           <td>{{ row.status }}</td>
           <td class="row-actions">
@@ -86,6 +86,13 @@
       </form>
     </div>
 
+    <FieldMappingValidationPanel
+      v-if="meta.key === 'data_import_rule' || meta.key === 'import_batch'"
+      :entry-type="meta.key === 'data_import_rule' ? 'rule' : 'batch'"
+      :entry-id="Number(selectedRowId)"
+      :entry-code="selectedRowCode"
+    />
+
     <footer class="page-foot">
       <span>共 {{ total }} 条{{ meta.name }}记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
@@ -103,6 +110,7 @@ import {
   moduleMeta,
   runAction as applyAction,
 } from '@/api/backend-service'
+import FieldMappingValidationPanel from '@/components/FieldMappingValidationPanel.vue'
 import type { EntryRow } from '@/data/types'
 
 const props = defineProps<{ moduleKey: string }>()
@@ -115,6 +123,8 @@ const filterFields = meta.fields.slice(0, 3)
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+const selectedRowId = ref(0)
+const selectedRowCode = ref('')
 const stats = computed(() => [
   { label: meta.metrics[0], value: total.value },
   { label: meta.metrics[1], value: rows.value.filter((row) => row.status === meta.statuses[1]).length },
@@ -182,9 +192,27 @@ async function reload() {
     const payload = await listEntries(meta.key, filters.value)
     rows.value = payload.items
     total.value = payload.total
+    syncSelectedRow()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '业务列表读取失败'
   }
+}
+
+function syncSelectedRow() {
+  if (!rows.value.length) {
+    selectedRowId.value = 0
+    selectedRowCode.value = ''
+    return
+  }
+  const current = rows.value.find((row) => Number(row.id) === selectedRowId.value)
+  const row = current ?? rows.value[0]
+  selectedRowId.value = Number(row.id)
+  selectedRowCode.value = String(row[meta.fields[0]] ?? row.id)
+}
+
+function selectRow(row: EntryRow) {
+  selectedRowId.value = Number(row.id)
+  selectedRowCode.value = String(row[meta.fields[0]] ?? row.id)
 }
 
 onMounted(reload)
